@@ -1,0 +1,38 @@
+---
+source: crates/oxc_react_compiler/tests/snapshot.rs
+input_file: crates/oxc_react_compiler/fixtures/capitalized-built-in-method-call.js
+---
+import { c as _c } from "react/compiler-runtime";
+// @validateNoCapitalizedCalls
+function Component(props) {
+	const $ = _c(8);
+	let t0;
+	if ($[0] !== props.month || $[1] !== props.year) {
+		t0 = new Date(Date.UTC(props.year, props.month + 1, 0)).getUTCDate();
+		$[0] = props.month;
+		$[1] = props.year;
+		$[2] = t0;
+	} else {
+		t0 = $[2];
+	}
+	const daysInMonth = t0;
+	let t1;
+	if ($[3] !== props.price) {
+		t1 = Intl.NumberFormat("en-US").format(props.price);
+		$[3] = props.price;
+		$[4] = t1;
+	} else {
+		t1 = $[4];
+	}
+	const price = t1;
+	let t2;
+	if ($[5] !== daysInMonth || $[6] !== price) {
+		t2 = <div>{daysInMonth} {price}</div>;
+		$[5] = daysInMonth;
+		$[6] = price;
+		$[7] = t2;
+	} else {
+		t2 = $[7];
+	}
+	return t2;
+}
