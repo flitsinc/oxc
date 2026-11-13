@@ -1,6 +1,6 @@
 use oxc_ast::{
     AstKind,
-    ast::{CallExpression, Expression, NewExpression},
+    ast::{Argument, CallExpression, Expression, NewExpression},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
@@ -47,9 +47,11 @@ declare_oxc_lint!(
     PreferResponseStaticJson,
     unicorn,
     style,
+    recommended,
     suggestion,
     version = "1.29.0",
-    short_description = "Enforces the use of `Response.json()` over `new Response(JSON.stringify())`.",
+    short_description =
+        "Enforces the use of `Response.json()` over `new Response(JSON.stringify())`.",
 );
 
 impl Rule for PreferResponseStaticJson {
@@ -145,7 +147,7 @@ fn should_add_semicolon(node: &AstNode, new_expr: &NewExpression, ctx: &LintCont
 }
 
 fn stringify_has_spread_arguments(call_expr: &CallExpression) -> bool {
-    call_expr.arguments.iter().any(oxc_ast::ast::Argument::is_spread)
+    call_expr.arguments.iter().any(Argument::is_spread)
 }
 
 #[test]

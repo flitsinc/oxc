@@ -54,7 +54,7 @@ pub struct LintCommand {
     #[bpaf(switch, hide_usage)]
     pub type_aware: bool,
 
-    /// Enable experimental type checking (includes TypeScript compiler diagnostics)
+    /// Enable type checking (includes TypeScript compiler diagnostics)
     #[bpaf(switch, hide_usage)]
     pub type_check: bool,
 
@@ -711,7 +711,7 @@ mod lint_options {
     fn format() {
         let options = get_lint_options("-f json");
         assert_eq!(options.output_options.format, OutputFormat::Json);
-        assert!(options.paths.is_empty());
+        assert_eq!(options.paths.len(), 0);
 
         let options = get_lint_options("-f agent");
         assert_eq!(options.output_options.format, OutputFormat::Agent);

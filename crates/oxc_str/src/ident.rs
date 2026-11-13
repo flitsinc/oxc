@@ -10,16 +10,19 @@ use std::{
     slice, str,
 };
 
-use oxc_allocator::{
-    Allocator, ArenaStringBuilder, CloneIn, CloneInSemanticIds, Dummy, FromIn, GetAllocator,
-};
-#[cfg(feature = "serialize")]
-use oxc_estree::{ESTree, JsonSafeString, Serializer as ESTreeSerializer};
 #[cfg(feature = "serialize")]
 use serde::{Serialize, Serializer as SerdeSerializer};
 
+use oxc_allocator::{
+    Allocator, ArenaStringBuilder, CloneIn, CloneInSemanticIds, Dummy, FromIn, GetAllocator,
+};
+use oxc_span::ContentEq;
+
+#[cfg(feature = "serialize")]
+use oxc_estree::{ESTree, JsonSafeString, Serializer as ESTreeSerializer};
+
 use crate::{
-    CompactStr, Str,
+    CompactStr, JSStr, Str,
     ident_hasher::{IdentBuildHasher, ident_hash},
 };
 
@@ -223,6 +226,12 @@ impl<'a> Ident<'a> {
     #[inline(always)] // Because this is a no-op
     pub fn as_arena_str(&self) -> Str<'a> {
         Str::from(self.as_str())
+    }
+
+    /// Convert this [`Ident`] into a [`JSStr`].
+    #[inline]
+    pub fn as_js_str(&self) -> JSStr<'a> {
+        JSStr::from(*self)
     }
 
     /// Convert this [`Ident`] into a [`String`].
@@ -449,6 +458,13 @@ impl Debug for Ident<'_> {
     }
 }
 
+impl ContentEq for Ident<'_> {
+    #[inline]
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 impl<'new_alloc> CloneIn<'new_alloc> for Ident<'_> {
     type Cloned = Ident<'new_alloc>;
 
@@ -542,6 +558,10 @@ pub type ArenaIdentHashMap<'alloc, V> =
 /// Hash set of [`Ident`], using precomputed ident hash.
 pub type IdentHashSet<'a> = hashbrown::HashSet<Ident<'a>, IdentBuildHasher>;
 
+/// Arena-allocated hash set of [`Ident`], using precomputed ident hash.
+pub type ArenaIdentHashSet<'alloc> =
+    oxc_allocator::ArenaHashSet<'alloc, Ident<'alloc>, IdentBuildHasher>;
+
 /// Creates an [`Ident<'static>`] for a string literal, evaluated at compile time.
 ///
 /// ```
@@ -571,7 +591,8 @@ pub type IdentHashSet<'a> = hashbrown::HashSet<Ident<'a>, IdentBuildHasher>;
 #[macro_export]
 macro_rules! static_ident {
     ($s:literal) => {
-        $crate::__internal::new_const_ident($s)
+        // `const { ... }` block guarantees evaluation at compile time
+        const { $crate::__internal::new_const_ident($s) }
     };
 }
 
@@ -621,9 +642,9 @@ mod test {
     #[test]
     fn ident_size() {
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(std::mem::size_of::<Ident<'_>>(), 16);
+        assert_eq!(size_of::<Ident<'_>>(), 16);
         #[cfg(target_pointer_width = "32")]
-        assert_eq!(std::mem::size_of::<Ident<'_>>(), 12);
+        assert_eq!(size_of::<Ident<'_>>(), 12);
     }
 
     #[test]
@@ -723,7 +744,7 @@ mod test {
     fn ident_deref() {
         let ident = Ident::from("hello");
         // Should be able to call str methods
-        assert!(ident.starts_with("hel")); // spellchecker:disable-line
+        assert!(ident.starts_with("hel"));
         assert_eq!(ident.len(), 5);
     }
 
@@ -851,5 +872,21 @@ mod test {
         map.insert(key, 42);
         assert_eq!(map.get("hello"), Some(&42));
         assert_eq!(map.get(&Ident::from("hello")), Some(&42));
+    }
+
+    #[test]
+    fn arena_ident_hashset() {
+        let allocator = Allocator::new();
+        let mut set = ArenaIdentHashSet::new_in(&allocator);
+        set.insert(Ident::from_in("hello", &allocator));
+        assert!(set.contains("hello"));
+        assert!(set.contains(&Ident::from("hello")));
+        assert!(!set.contains("world"));
+
+        let set =
+            ArenaIdentHashSet::from_iter_in([Ident::from("foo"), Ident::from("bar")], &allocator);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains("foo"));
+        assert!(set.contains("bar"));
     }
 }

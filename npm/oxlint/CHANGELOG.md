@@ -4,6 +4,57 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [1.92.0] - 2026-11-06
+
+### 🚀 Features
+
+- b7d2c75 linter/eslint/no-redeclare: Add `ignoreDeclarationMerge` option (#28816) (Cam McHenry)
+
+## [1.91.0] - 2026-11-02
+
+### 🚀 Features
+
+- 419c1b0 linter: Add allow and allowPattern options to react/capitalized-calls (Christian Vuerings)
+
+## [1.90.0] - 2026-10-27
+
+### 🚀 Features
+
+- 831cdf1 oxlint: Require mininum oxlint-tsgolint version v7.0.2005 (#28118) (camc314)
+- d1b00f4 linter/typescript: Implement no-unsafe-enum-assignment rule (#28117) (camc314)
+- 165c91f linter/typescript/await-thenable: Support `allowMixedPromiseArrays` option (#28116) (camc314)
+
+## [1.89.0] - 2026-10-19
+
+### 🐛 Bug Fixes
+
+- 9a424c2 oxlint,oxfmt: Correct Node.js TypeScript support range (#27699) (camc314)
+
+## [1.88.0] - 2026-10-13
+
+### 🚀 Features
+
+- 3c361a7 linter/unicorn/prefer-query-selector: Add `allowWithVariables` option (#27346) (Mikhail Baev)
+
+## [1.86.0] - 2026-09-28
+
+### 🚀 Features
+
+- 9d80eed linter/react/only-export-components: Support `allowCompoundComponents` (#27117) (Kuroda Kayn)
+- e05b155 linter: Add typescript/no-generated-empty-object-type (#26958) (camc314)
+
+## [1.82.0] - 2026-09-07
+
+### 🚀 Features
+
+- 6a0e19c linter/eslint/no-unmodified-loop-condition: Support `checkConditionalExpressions` option (#26249) (camc314)
+
+## [1.81.0] - 2026-08-31
+
+### 📚 Documentation
+
+- d5be037 linter/typescript/switch-exhaustiveness-check: Clarify default case comment pattern (#26100) (camc314)
+
 ## [1.79.0] - 2026-08-18
 
 ### 💥 BREAKING CHANGES

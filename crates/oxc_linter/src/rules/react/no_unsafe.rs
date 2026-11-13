@@ -1,4 +1,4 @@
-use oxc_ast::AstKind;
+use oxc_ast::{AstKind, StaticPropertyName};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
@@ -88,7 +88,8 @@ declare_oxc_lint!(
     correctness,
     config = NoUnsafeConfig,
     version = "1.35.0",
-    short_description = "This rule identifies and restricts the use of unsafe React lifecycle methods.",
+    short_description =
+        "This rule identifies and restricts the use of unsafe React lifecycle methods.",
 );
 
 impl Rule for NoUnsafe {
@@ -99,23 +100,22 @@ impl Rule for NoUnsafe {
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
             AstKind::MethodDefinition(method_def) => {
-                if let Some(name) = method_def.key.static_name()
-                    && is_unsafe_method(name.as_ref(), self.0.check_aliases, ctx)
+                if let Some(name) =
+                    method_def.key.static_name().and_then(StaticPropertyName::into_cow_str)
+                    && is_unsafe_method(&name, self.0.check_aliases, ctx)
                     && get_parent_component(node, ctx).is_some()
                 {
-                    ctx.diagnostic(no_unsafe_diagnostic(name.as_ref(), method_def.key.span()));
+                    ctx.diagnostic(no_unsafe_diagnostic(&name, method_def.key.span()));
                 }
             }
             AstKind::ObjectProperty(obj_prop) => {
-                if let Some(name) = obj_prop.key.static_name()
-                    && is_unsafe_method(name.as_ref(), self.0.check_aliases, ctx)
+                if let Some(name) =
+                    obj_prop.key.static_name().and_then(StaticPropertyName::into_cow_str)
+                    && is_unsafe_method(&name, self.0.check_aliases, ctx)
                 {
                     for ancestor in ctx.nodes().ancestors(node.id()) {
                         if is_es5_component(ancestor) {
-                            ctx.diagnostic(no_unsafe_diagnostic(
-                                name.as_ref(),
-                                obj_prop.key.span(),
-                            ));
+                            ctx.diagnostic(no_unsafe_diagnostic(&name, obj_prop.key.span()));
                             break;
                         }
                     }

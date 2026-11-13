@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use cow_utils::CowUtils;
 use similar::TextDiff;
 use walkdir::WalkDir;
 
@@ -23,8 +24,8 @@ use oxc_formatter::{
     format_program, parse_for_format,
 };
 use oxc_formatter_core::LineWidth;
-use oxc_formatter_tests::conformance::print_text_diff;
 use oxc_span::SourceType;
+use oxc_tasks_common::print_text_diff;
 
 fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("jsdoc").join("fixtures")
@@ -47,19 +48,23 @@ fn jsdoc() {
         let expected = fs::read_to_string(&expected_path).unwrap();
 
         let (jsdoc_options, quote_style, line_width) = load_jsdoc_options(&input_path);
-        let Some(actual) =
-            run_formatter(&source_text, &input_path, &jsdoc_options, quote_style, line_width)
-        else {
-            println!("PARSE ERROR: {rel_path}");
-            failures.push(rel_path);
-            continue;
-        };
-
-        if actual != expected {
-            println!("FAIL: {rel_path}");
-            print_text_diff(&TextDiff::from_lines(&expected, &actual));
-            println!();
-            failures.push(rel_path);
+        // Line endings are not content, so every one formats to the same output
+        for (name, line_ending) in [("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")] {
+            let source_text = source_text.cow_replace('\n', line_ending);
+            let Some(actual) =
+                run_formatter(&source_text, &input_path, &jsdoc_options, quote_style, line_width)
+            else {
+                println!("PARSE ERROR ({name}): {rel_path}");
+                failures.push(format!("{rel_path} ({name})"));
+                break;
+            };
+            if actual != expected {
+                println!("FAIL ({name}): {rel_path}");
+                print_text_diff(&TextDiff::from_lines(&expected, &actual));
+                println!();
+                failures.push(format!("{rel_path} ({name})"));
+                break;
+            }
         }
     }
 
@@ -92,7 +97,7 @@ fn collect_fixture_pairs() -> Vec<(PathBuf, PathBuf)> {
         }
 
         // Skip non-source files (options.json, etc.)
-        let ext = path.extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+        let ext = path.extension().map_or_default(|e| e.to_string_lossy());
         if !matches!(ext.as_ref(), "js" | "ts" | "jsx" | "tsx") {
             continue;
         }
@@ -225,7 +230,7 @@ fn run_formatter(
     // This deliberately DIVERGES from production oxfmt,
     // whose fail-loud `format()` would report a diagnostic for these fixtures instead of formatting.
     let ret = parse_for_format(&allocator, source_text, source_type);
-    if ret.panicked {
+    if ret.fatal_error {
         return None;
     }
 

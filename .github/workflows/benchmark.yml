@@ -32,7 +32,12 @@ jobs:
   determine-matrix:
     name: Determine Benchmark
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, '0-merge') }}
+    if: >
+      github.repository == 'oxc-project/oxc' &&
+      (
+        github.event_name != 'pull_request' ||
+        !contains(github.event.pull_request.labels.*.name, '0-merge')
+      )
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -87,12 +92,15 @@ jobs:
               --bench ${{ matrix.component }} \
               --no-default-features --features ${{ matrix.feature }} --features codspeed
           fi
+          bench=$(cargo build --release -p oxc_benchmark --bench ${{ matrix.component }} \
+            --no-default-features --features ${{ matrix.feature }} --features codspeed \
+            --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bench"]) | .executable')
           mkdir -p target/codspeed/analysis/oxc_benchmark
-          mv target/release/deps/${{ matrix.component }}-* target/codspeed/analysis/oxc_benchmark
-          rm target/codspeed/analysis/oxc_benchmark/*.d
+          mv "$bench" target/codspeed/analysis/oxc_benchmark
 
       - name: Run benchmark
-        uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
+        uses: CodSpeedHQ/action@c4fd08a3a159bd0cc208da1e0edf32b8c47d75e5 # v5.4.0
         timeout-minutes: 30
         with:
           mode: ${{ matrix.mode }}

@@ -82,10 +82,11 @@ declare_oxc_lint!(
     NoUnnecessaryBooleanLiteralCompare(tsgolint),
     typescript,
     suspicious,
-    pending,
+    fix,
     config = NoUnnecessaryBooleanLiteralCompareConfig,
     version = "1.12.0",
-    short_description = "This rule disallows unnecessary equality comparisons with boolean literals.",
+    short_description =
+        "This rule disallows unnecessary equality comparisons with boolean literals.",
 );
 
 impl Rule for NoUnnecessaryBooleanLiteralCompare {

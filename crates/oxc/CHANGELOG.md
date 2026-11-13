@@ -4,6 +4,18 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [0.158.0] - 2026-11-09
+
+### 📚 Documentation
+
+- d5832ab oxc: Correct README APIs and feature requirements (#29068) (camc314)
+
+## [0.149.0] - 2026-09-07
+
+### 💥 BREAKING CHANGES
+
+- 66744f0 parser: [**BREAKING**] Rename `panicked` to `fatal_error` in `ParserReturn` (#26382) (overlookmotel)
+
 ## [0.142.0] - 2026-07-27
 
 ### 🚀 Features

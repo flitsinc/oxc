@@ -367,18 +367,15 @@ impl ExtensionsConfig {
             value.get("checkTypeImports").and_then(Value::as_bool).unwrap_or_default();
 
         // Parse pathGroupOverrides if present
-        let path_group_overrides = value
-            .get("pathGroupOverrides")
-            .and_then(Value::as_array)
-            .map(|overrides| {
+        let path_group_overrides =
+            value.get("pathGroupOverrides").and_then(Value::as_array).map_or_default(|overrides| {
                 overrides
                     .iter()
                     .filter_map(|override_val| {
                         serde_json::from_value::<PathGroupOverride>(override_val.clone()).ok()
                     })
                     .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+            });
 
         // Pre-allocate HashMap with estimated capacity for better performance
         let capacity = if let Some(obj) = value.as_object() {
@@ -553,10 +550,12 @@ impl Rule for Extensions {
             return;
         }
         for argument in &call_expr.arguments {
-            if let Argument::StringLiteral(s) = argument {
+            if let Argument::StringLiteral(s) = argument
+                && let Some(source) = s.value.as_str()
+            {
                 self.process_import(
                     ctx,
-                    s.value.as_str(),
+                    source,
                     call_expr.span,
                     false, // require() is never a type import
                     true,  // treat require as import for diagnostics
@@ -876,6 +875,8 @@ fn test() {
     use serde_json::json;
 
     let pass = vec![
+        // A `require()` specifier with a lone surrogate is not checked.
+        (r#"const foo = require("./foo\uD800");"#, Some(json!(["always"]))),
         // Default config: no extension requirements, unconfigured extensions are ignored
         (r#"import a from "@/a""#, None),
         (r#"import a from "a""#, None),

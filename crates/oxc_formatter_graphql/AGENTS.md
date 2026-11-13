@@ -9,9 +9,10 @@ Prettier compatible GraphQL formatter (`oxfmt`'s Tier 1 backend), using the `oxc
 
 - Built on `oxc_formatter_core` for the language-agnostic IR + Printer + builders + macros
   - See `crates/oxc_formatter_core/AGENTS.md` for the IR/pipeline details
-- Two entry points:
+- Entry points:
   - `format()`: standalone files (returns a printable `Formatted`)
   - `format_to_ir()`: embedded use via the dispatcher (e.g. graphql-in-js)
+  - `parse_for_format()`: the parse `format()` runs, exposed for callers that inspect the AST (e.g. the fixture harness's fingerprint)
 
 ### Forked parser
 
@@ -21,7 +22,7 @@ This means it is not locked to a specific GraphQL version and can parse a wide r
 On the other hand, `apollo-parser`, the upstream we selected, strictly follows its versioning and currently only supports syntax up to Oct2021.
 Therefore, we forked it as [`oxc-graphql-parser`](https://crates.io/crates/oxc-graphql-parser) and added some support ourselves, pinned via the workspace `Cargo.toml`.
 
-The fork aligns with graphql-js v17.x, which Prettier 3.9 targets:
+The fork aligns with graphql-js v17.x, which Prettier targets:
 
 - executable descriptions (Sep2025 spec) and directive extensions (`extend directive`) are always-on
 - fragment arguments (`...F(size: $size)`) are behind the `experimental_fragment_arguments` flag
@@ -39,36 +40,27 @@ The shared policy applies; GraphQL specifics:
 `graphql-js` does not attach comments to the AST;
 Prettier collects them from the token stream and attaches leading/trailing/dangling per node.
 
-This crate instead collects comment spans into a positional cursor, drained in source order by claim points spread through the printers
-(the `flush_*` helpers in `src/comments.rs`; behavior pinned by `tests/fixtures/graphql/comments-inside-node-spans.graphql`).
+This crate instead collects comment spans into a positional cursor, drained in source order by claim points spread through the printers, like the other `oxc_formatter_*` crates.
 
-The shared placement invariants apply: a comment stays between the source tokens it sat between, and a same-line trailing comment stays on its line.
-
-Two known deviations, kept deliberately (details live on the helpers' doc comments):
-
-- an own-line comment claimed right after a printed literal inlines on that literal's line (`write_leading_comments`)
-- positions no printer claims fall back to a trailing comment after the node, which may cross remaining in-span tokens (`flush_overlooked_inside_comments`)
-
-Where Prettier relocates a comment across tokens instead, we diverge, see DIVERGENCES.md.
-
-Two constraints the code cannot show:
-
-- the cursor is monotonic: every claim point must drain everything inside the span it just printed
-  - or a later flush point's gap range inverts and panics (issue #24927)
-- trailing claims are bounded at the literal's SOURCE position
-  - or re-formatting is not idempotent (`g: # c` must not become `g # c` + `:`)
-
-Node spans are significant-token spans (trivia is never included), so layout decisions use them directly.
-All span bridging (conversion, closing-delimiter derivation, the bare-token source scan) lives in `src/print/span.rs`.
+- The policy's opener exception needs no code: nothing claims a comment right after `{` / `(` / `[`, so `write_sequence`'s leading flush takes it
+  - Prettier's attachment differs for some openers, see DIVERGENCES.md
+- Two known invariant violations, kept deliberately (details live on the helpers' doc comments):
+  - an own-line comment claimed right after a printed literal inlines on that literal's line (`write_leading_comments`)
+  - positions no printer claims fall back to a trailing comment after the node, which may cross remaining in-span tokens (`flush_overlooked_inside_comments`)
+- Two constraints the code cannot show:
+  - the cursor is monotonic: every claim point must drain everything inside the span it just printed, or a later flush point's gap range inverts and panics (issue #24927)
+  - trailing claims are bounded at the literal's SOURCE position, or re-formatting is not idempotent (`g: # c` must not become `g # c` + `:`)
 
 ### Strings
 
 Prettier prints `StringValue` from `graphql-js`'s _cooked_ value and re-encodes it.
-`oxc-graphql-parser`'s `StringValue.value` is cooked but not to spec (no block-string dedent / blank-line trimming, no surrogate pairing), so `src/print/string.rs` cooks from `raw` itself:
+`oxc-graphql-parser`'s `StringValue.value` is that for a regular string,
+but a block string's only has its line endings normalized, so `src/print/string.rs` adds:
 
 - the GraphQL spec `BlockStringValue` algorithm (dedent + blank-line trimming)
-- escape decoding for regular strings (incl. surrogate pairs)
 - Prettier's re-encoding (`"`/`\` escaped, newline as `\n`, `"""` as `\"""`)
+
+Dedenting in the parser would copy every indented block string into the arena: the formatter borrows its lines instead (measured +7.7% instructions on a description-heavy schema).
 
 Blank-line runs inside block strings are part of the string VALUE and are emitted with `exact_line_breaks()`. Values are written pre-trimmed, the core printer never trims.
 
@@ -77,8 +69,6 @@ Blank-line runs inside block strings are part of the string VALUE and are emitte
 - Blank-line preservation classifies the inter-token gap (`classify_gap`):
   a blank line is a whitespace-only line strictly inside the gap.
   Counting raw newlines would over-report when tokens (e.g. the `&` between two `implements` comments, or an insignificant comma) sit on their own line.
-- A cooked `\r` escape in a string value is re-emitted as `\r`
-  (Prettier emits a raw CR byte, which the core `text()` builder forbids; the string VALUE is identical).
 
 ## Verification
 

@@ -14,21 +14,22 @@ mod source_text;
 mod utils;
 
 use oxc_allocator::Allocator;
-use oxc_ast::Comment;
 use oxc_ast::ast::*;
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_formatter_core::{FormatSession, Formatted, InputKind};
+use oxc_formatter_core::{EmbeddedIr, FormatSession, Formatted, InputKind};
 use oxc_parser::{ParseOptions, Parser, ParserReturn};
 use oxc_span::SourceType;
 
 // Internal only AST-wrapping IR primitives.
-// External call-sites use the text-in `format`, `format_fragment`,
+// External call-sites use the text-in `format`, `format_with_session`, `format_to_ir`,
 // or the special-purpose AST-in `format_program`.
 pub(crate) use crate::ast_nodes::{AstNode, AstNodes};
-pub use crate::embed_context::{CssInJsTemplate, HtmlEmbedMeta};
-// `JsFormatContext` is public solely as the type parameter of the `Formatted`
-// returned by `format` / `format_fragment`.
-// Its methods are not part of the public contract.
+pub use crate::embed_context::{
+    CssInJsTemplate, ExpressionLayout, ExpressionRoot, HtmlInJsTemplate, JsEmbeddedIn, JsRoot,
+    MarkdownInJsTemplate, ProgramLayout, ProgramSemicolons,
+};
+// `JsFormatContext` is public solely as the type parameter of the returned `Formatted`;
+// its methods are not part of the public contract.
 pub use crate::formatter::JsFormatContext;
 pub use crate::ir_transform::options::*;
 pub use crate::options::*;
@@ -38,37 +39,11 @@ pub use detect_code_removal::detect_code_removal;
 // `crate::write!` / `crate::format_args!` / `crate::best_fitting!`
 // call-sites in `oxc_formatter` continue to work without changes.
 pub(crate) use oxc_formatter_core::{best_fitting, format_args, write};
-// Internal-only re-exports so crate-local `use crate::{Buffer, Format};` continues to work
+// Internal-only re-exports so crate-local `use crate::Format;` continues to work
 // without leaking these IR primitives in the public API.
-pub(crate) use oxc_formatter_core::{Buffer, Format};
+pub(crate) use oxc_formatter_core::Format;
 
 use self::formatter::prelude::tag::Label;
-use crate::print::{FormatFunctionParams, FormatTypeParameters};
-
-/// Usage context a JS/TS fragment is placed in js-in-xxx.
-/// Drives context-dependent formatting decisions (e.g. forced parentheses, quote style).
-///
-/// Currently `format_fragment()` callers pass wrapped source.
-/// (Prettier's multiparser wraps the fragment before `textToDoc()`);
-/// Each variant documents the expected wrap as an input contract.
-/// The JS formatter knows nothing about Prettier/Vue vocabulary.
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub enum FragmentContext {
-    /// Function params in a binding-LHS position (e.g. Vue `v-for` left).
-    /// Parentheses are forced when there are multiple params or a rest element.
-    ///
-    /// Input wrap: `function _(PARAMS) {}`
-    FunctionParamsAsBindingLhs,
-    /// Function params in a plain binding position (e.g. Vue `v-slot`).
-    ///
-    /// Input wrap: `function _(PARAMS) {}`
-    FunctionParamsAsBinding,
-    /// Type parameters in a standard declaration position (e.g. Vue `<script generic>`).
-    ///
-    /// Input wrap: `type T<PARAMS> = any`
-    TypeParameters,
-}
 
 /// Format an entire JS/TS program from source text, text-in entry point.
 ///
@@ -108,81 +83,70 @@ pub fn format_with_session<'a>(
     Ok(format_program_with_session(session, program, options))
 }
 
-/// Format a pre-wrapped JS/TS-in-xxx fragment from source text.
+/// Parse `source_text` and build the IR for embedding into another formatter's document
+/// (dispatcher path, e.g. a `js` code fence in Markdown, an `onclick` value, Vue's `{{ }}` and directive values).
 ///
-/// The caller passes source already wrapped per the [`FragmentContext`] input contract
-/// (Prettier wraps it before calling `textToDoc()`);
-/// This function parses it, extracts the target node, and formats it with the context-appropriate rules.
+/// Unlike [`format_with_session`], this:
+/// - allocates from the session's shared arena and `GroupId` space, so the IR lives as long as the parent's document
+/// - leaves the Tailwind classes unsorted (the parent sorts them in its own batch)
+/// - emits neither a BOM nor the trailing newline
+///
+/// `source_text` is the part of the host's document as written; it is wrapped here to parse as `root` says.
+/// `embedded_in` is what the host does with the code, for the rules that keep what it reads of it.
 ///
 /// # Errors
-/// Returns the first parse error,
-/// or an error when the wrapped source doesn't match the shape the context expects.
-pub fn format_fragment<'a>(
-    allocator: &'a Allocator,
-    source_text: &'a str,
+/// Returns the first parse error, an error when the code is not the one `root` names,
+/// when a comment would not print (`v-slot="/* c */"` has no params to attach it to),
+/// or, for a host that inlines the code ([`JsEmbeddedIn::inlines_code`]), when it ends in a line comment without a line break after it
+/// or is a top-level sequence in no parens.
+pub fn format_to_ir<'a>(
+    session: &FormatSession<'a>,
+    source_text: &str,
     source_type: SourceType,
     options: JsFormatOptions,
-    context: FragmentContext,
-) -> Result<Formatted<'a, JsFormatContext<'a>>, OxcDiagnostic> {
-    let program = parse(allocator, source_text, source_type)?;
+    root: JsRoot,
+    embedded_in: JsEmbeddedIn,
+) -> Result<EmbeddedIr<'a>, OxcDiagnostic> {
+    let allocator = session.allocator();
 
-    // For now, every fragment context sits inside a double-quoted attribute,
-    // so single quotes avoid clashing with the surrounding attribute delimiter.
-    //
-    // NOTE: Since this options is just the preferred quote (not a forced),
-    // this may not be enough for all cases.
-    // But it seems fine for almost all cases, so leave it for now.
-    let options = JsFormatOptions { quote_style: QuoteStyle::Single, ..options };
+    // Fast path: a name, about half of a Vue template's values, prints as written with no parse (`FormatName`)
+    if let Some(content) = print::FormatName::new(allocator, source_text, root) {
+        let js_context = JsFormatContext::new(content.name, source_type, &[], options);
+        let (ir, _) = formatter::build_ir(
+            js_context,
+            session,
+            oxc_formatter_core::Arguments::new(&[oxc_formatter_core::Argument::new(&content)]),
+        );
+        return Ok(EmbeddedIr { ir });
+    }
 
-    // A js-in-xxx fragment never owns file envelopes (BOM / front matter)
-    // and never dispatches embedded languages of its own.
-    let session = FormatSession::new(allocator, InputKind::Fragment);
+    let (prefix, suffix) = print::root_wrapper(root);
+    let wrapped = allocator.alloc_concat_strs_array([prefix, source_text, suffix]);
+    let program = parse(allocator, wrapped, source_type)?;
+    let ends_in_line_comment = print::check_root(
+        program,
+        prefix.len()..prefix.len() + source_text.len(),
+        root,
+        embedded_in.inlines_code,
+    )?;
 
-    let formatted = match context {
-        FragmentContext::FunctionParamsAsBindingLhs | FragmentContext::FunctionParamsAsBinding => {
-            let Some(Statement::FunctionDeclaration(func)) = program.body.first() else {
-                return Err(OxcDiagnostic::error(
-                    "Expected fragment wrapped as `function _(...) {}`",
-                ));
-            };
-            let params = &*func.params;
-            // Parens are forced only in the binding-LHS context with multiple params or a rest element.
-            let with_parens = matches!(context, FragmentContext::FunctionParamsAsBindingLhs)
-                && (1 < params.items.len() || params.rest.is_some());
-            let node = AstNode::new(params, AstNodes::Dummy(), allocator);
-            let content = FormatFunctionParams::new(&node, with_parens);
-            format_node(
-                &session,
-                options,
-                &content,
-                program.source_text,
-                source_type,
-                &program.comments,
-            )
-        }
-        FragmentContext::TypeParameters => {
-            let Some(Statement::TSTypeAliasDeclaration(decl)) = program.body.first() else {
-                return Err(OxcDiagnostic::error(
-                    "Expected fragment wrapped as `type T<...> = any`",
-                ));
-            };
-            let Some(type_params) = decl.type_parameters.as_deref() else {
-                return Err(OxcDiagnostic::error("Expected type parameters in wrapped fragment"));
-            };
-            let node = AstNode::new(type_params, AstNodes::Dummy(), allocator);
-            let content = FormatTypeParameters::new(&node);
-            format_node(
-                &session,
-                options,
-                &content,
-                program.source_text,
-                source_type,
-                &program.comments,
-            )
-        }
-    };
+    let mut js_context =
+        JsFormatContext::new(program.source_text, program.source_type, &program.comments, options);
+    js_context.set_in_html_attribute(embedded_in.in_html_attribute);
 
-    Ok(formatted)
+    let node = AstNode::new(program, AstNodes::Dummy());
+    let content = print::FormatRoot { program: &node, root, ends_in_line_comment };
+    let (ir, js_context) = formatter::build_ir(
+        js_context,
+        session,
+        oxc_formatter_core::Arguments::new(&[oxc_formatter_core::Argument::new(&content)]),
+    );
+
+    // Losing a comment is worse than leaving the code as written
+    if !js_context.comments().unprinted_comments().is_empty() {
+        return Err(OxcDiagnostic::error("Some comments in the code were not printed"));
+    }
+    Ok(EmbeddedIr { ir })
 }
 
 /// Format an already-parsed program, special-purpose AST-in entry point.
@@ -212,14 +176,14 @@ fn format_program_with_session<'a>(
     program: &'a Program<'a>,
     options: JsFormatOptions,
 ) -> Formatted<'a, JsFormatContext<'a>> {
-    let node = AstNode::new(program, AstNodes::Dummy(), session.allocator());
-    format_node(
+    let node = AstNode::new(program, AstNodes::Dummy());
+    // The only site that invokes the IR `formatter::format`
+    let context =
+        JsFormatContext::new(program.source_text, program.source_type, &program.comments, options);
+    formatter::format(
+        context,
         session,
-        options,
-        &node,
-        program.source_text,
-        program.source_type,
-        &program.comments,
+        oxc_formatter_core::Arguments::new(&[oxc_formatter_core::Argument::new(&node)]),
     )
 }
 
@@ -229,7 +193,7 @@ fn format_program_with_session<'a>(
 /// so a program fed to [`format_program`] matches the text-in path.
 /// Use this when you need to control parse-error handling
 /// or isolate parsing from formatting (perf/allocation measurement, error-tolerant harnesses).
-/// Inspect the returned `ParserReturn` (`errors` / `panicked`) and pass `&ret.program` to [`format_program`].
+/// Inspect the returned `ParserReturn` (`errors` / `fatal_error`) and pass `&ret.program` to [`format_program`].
 pub fn parse_for_format<'a>(
     allocator: &'a Allocator,
     source_text: &'a str,
@@ -253,7 +217,7 @@ pub fn parse_for_format<'a>(
 
 /// Parse `source_text` and promote the `Program` to the arena lifetime.
 ///
-/// NOTE: Reject ANY parse diagnostic, not only `panicked`: we format valid code only, by design.
+/// NOTE: Reject ANY parse diagnostic, not only `fatal_error`: we format valid code only, by design.
 /// A recovered AST may be an unfaithful "fix" of the source
 /// (e.g. invalid modifiers are reported but not all of them are representable),
 /// so formatting it can silently rewrite what the user wrote.
@@ -268,27 +232,6 @@ fn parse<'a>(
         return Err(err);
     }
     Ok(allocator.alloc(ret.program))
-}
-
-/// Run the IR formatter over a single `Format` value and return its `Formatted` IR.
-///
-/// The only site that invokes the IR `formatter::format`.
-/// Callers ([`format_program`] / [`format_fragment`]) construct the node (a whole-`Program` wrapper or a fragment),
-/// and pass the surrounding `source_text` / `comments`.
-fn format_node<'a, F: Format<'a, JsFormatContext<'a>>>(
-    session: &FormatSession<'a>,
-    options: JsFormatOptions,
-    node: &F,
-    source_text: &'a str,
-    source_type: SourceType,
-    comments: &'a [Comment],
-) -> Formatted<'a, JsFormatContext<'a>> {
-    let context = JsFormatContext::new(source_text, source_type, comments, options);
-    formatter::format(
-        context,
-        session,
-        oxc_formatter_core::Arguments::new(&[oxc_formatter_core::Argument::new(node)]),
-    )
 }
 
 // ---
@@ -306,8 +249,8 @@ pub(crate) enum JsLabels {
 }
 
 impl Label for JsLabels {
-    fn id(&self) -> u64 {
-        *self as u64
+    fn id(&self) -> u32 {
+        *self as u32
     }
 
     fn debug_name(&self) -> &'static str {

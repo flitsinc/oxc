@@ -1,5 +1,5 @@
 use oxc_formatter_core::{
-    Buffer, LINE_TERMINATORS, SourceText, SpanCursor, arena_cow_str,
+    LINE_TERMINATORS, SourceText, SpanCursor, arena_cow_str,
     builders::{
         empty_line, expand_parent, hard_line_break, line_suffix, line_suffix_boundary, space, text,
     },
@@ -73,13 +73,14 @@ pub fn flush_leading_comments(value_start: u32, f: &mut GraphqlFormatter<'_, '_>
 }
 
 /// Emit dangling comments inside an otherwise empty container (the caller wraps the result in
-/// [`oxc_formatter_core::builders::block_indent`] or similar).
+/// [`oxc_formatter_core::builders::block_indent`] or similar), preserving a blank line between two of them.
 pub fn write_dangling_comments(comments: &[Span], f: &mut GraphqlFormatter<'_, '_>) {
-    for (i, &span) in comments.iter().enumerate() {
-        if i > 0 {
-            write!(f, hard_line_break());
-        }
-        write_single_comment(span, f);
+    let Some(&first) = comments.first() else { return };
+    write_single_comment(first, f);
+    let source = f.context().source_text();
+    for pair in comments.windows(2) {
+        write_gap(source.bytes_range(pair[0].end, pair[1].start), f);
+        write_single_comment(pair[1], f);
     }
 }
 
@@ -245,7 +246,7 @@ fn is_suppression_comment(source: SourceText<'_>, span: Span) -> bool {
 /// Returns `true` if any pending comment up to `before` is a suppression marker.
 pub fn is_suppressed_before(f: &GraphqlFormatter<'_, '_>, before: u32) -> bool {
     let source = f.context().source_text();
-    f.context().comments().iter_before(before).any(|c| is_suppression_comment(source, c))
+    f.context().comments().iter_before(before).copied().any(|c| is_suppression_comment(source, c))
 }
 
 /// Emits a node's leading comments, then the node's source verbatim,

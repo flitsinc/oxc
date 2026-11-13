@@ -14,7 +14,7 @@ use std::ops::Deref;
 use allowed::FunctionParameterKind;
 use ignored::IgnoreReason;
 use options::{IgnorePattern, NoUnusedVarsFixMode, NoUnusedVarsOptions};
-use oxc_ast::{AstKind, ast::CatchParameter};
+use oxc_ast::{AstKind, AstType, ast::CatchParameter};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::{AstNode, ScopeFlags, SymbolFlags};
@@ -202,10 +202,12 @@ declare_oxc_lint!(
     NoUnusedVars,
     eslint,
     correctness,
+    recommended,
     fix = conditional_dangerous_fix_or_suggestion,
     config = NoUnusedVarsConfig,
     version = "0.7.0",
-    short_description = "Disallows variable declarations, imports, or type declarations that are not used in code.",
+    short_description =
+        "Disallows variable declarations, imports, or type declarations that are not used in code.",
 );
 
 impl Deref for NoUnusedVars {
@@ -382,7 +384,12 @@ impl NoUnusedVars {
                 if self.is_allowed_type_parameter(symbol, declaration.id()) {
                     return;
                 }
-                ctx.diagnostic(diagnostic::declared(symbol, &self.vars_ignore_pattern, false));
+                Self::report_with_fix_mode(
+                    self.fix.variables,
+                    ctx,
+                    diagnostic::declared(symbol, &self.vars_ignore_pattern, false),
+                    |fixer| Self::remove_unused_type_parameter(fixer, symbol, declaration.id()),
+                );
             }
             // Mapped type keys are always used within the type definition
             AstKind::TSMappedType(_) => {}
@@ -448,14 +455,9 @@ impl NoUnusedVars {
         // get used in generated code. We don't have a way to detect
         // "jsxPragmas" or whether TSX files are using "jsx": "react-jsx", so we
         // just allow all cases.
-        if symbol.flags().contains(SymbolFlags::Import)
+        symbol.flags().contains(SymbolFlags::Import)
             && symbol.is_in_jsx()
             && symbol.is_possibly_jsx_factory()
-        {
-            return true;
-        }
-
-        false
     }
 }
 
@@ -490,6 +492,10 @@ impl Symbol<'_, '_> {
     }
 
     fn is_in_declare_global(&self) -> bool {
+        if !self.nodes().contains(AstType::TSGlobalDeclaration) {
+            return false;
+        }
+
         self.scoping()
             .scope_ancestors(self.scope_id())
             .filter(|&scope_id| {
@@ -498,9 +504,7 @@ impl Symbol<'_, '_> {
             })
             .any(|ambient_module_scope_id| {
                 matches!(
-                    self.nodes()
-                        .get_node(self.scoping().get_node_id(ambient_module_scope_id))
-                        .kind(),
+                    self.nodes().kind(self.scoping().get_node_id(ambient_module_scope_id)),
                     AstKind::TSGlobalDeclaration(_)
                 )
             })

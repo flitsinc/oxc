@@ -75,8 +75,8 @@ declare_oxc_lint!(
     /// ```js
     /// typeof foo === "strnig"
     /// typeof foo == "undefimed"
-    /// typeof bar != "nunber"     // spellchecker:disable-line
-    /// typeof bar !== "fucntion"     // spellchecker:disable-line
+    /// typeof bar != "nunber"
+    /// typeof bar !== "fucntion"
     /// ```
     ///
     /// Examples of **correct** code for this rule:
@@ -89,6 +89,7 @@ declare_oxc_lint!(
     ValidTypeof,
     eslint,
     correctness,
+    recommended,
     conditional_fix,
     config = ValidTypeof,
     version = "0.0.3",
@@ -125,8 +126,11 @@ impl Rule for ValidTypeof {
         };
 
         if let Expression::StringLiteral(lit) = sibling {
-            if !VALID_TYPES.contains(&lit.value.as_str()) {
-                let help = get_typo_suggestion(lit.value.as_str())
+            if lit.value.as_str().is_none_or(|value| !VALID_TYPES.contains(&value)) {
+                let help = lit
+                    .value
+                    .as_str()
+                    .and_then(get_typo_suggestion)
                     .map(|suggestion| format!("Did you mean `\"{suggestion}\"`?"));
                 ctx.diagnostic(invalid_value(help, sibling.span()));
             }
@@ -136,8 +140,10 @@ impl Rule for ValidTypeof {
         if let Expression::TemplateLiteral(template) = sibling
             && let Some(quasi) = template.single_quasi()
         {
-            if !VALID_TYPES.contains(&quasi.as_str()) {
-                let help = get_typo_suggestion(quasi.as_str())
+            if quasi.as_str().is_none_or(|value| !VALID_TYPES.contains(&value)) {
+                let help = quasi
+                    .as_str()
+                    .and_then(get_typo_suggestion)
                     .map(|suggestion| format!("Did you mean `\"{suggestion}\"`?"));
                 ctx.diagnostic(invalid_value(help, sibling.span()));
             }
@@ -145,7 +151,7 @@ impl Rule for ValidTypeof {
         }
 
         if let Expression::Identifier(ident) = sibling
-            && ident.name == "undefined"
+            && ident.is_undefined()
             && ctx.is_reference_to_global_variable(ident)
         {
             ctx.diagnostic_with_fix(
@@ -258,12 +264,12 @@ fn test() {
             Some(serde_json::json!([{ "requireStringLiterals": true }])),
         ),
         // Typo suggestions for each valid typeof type
-        ("typeof foo === 'biigint'", None), // spellchecker:disable-line
-        ("typeof foo === 'bolean'", None),  // spellchecker:disable-line
-        ("typeof foo === 'fucntion'", None), // spellchecker:disable-line
-        ("typeof foo === 'nunber'", None),  // spellchecker:disable-line
-        ("typeof foo === 'obejct'", None),  // spellchecker:disable-line
-        ("typeof foo === 'symol'", None),   // spellchecker:disable-line
+        ("typeof foo === 'biigint'", None),
+        ("typeof foo === 'bolean'", None),
+        ("typeof foo === 'fucntion'", None),
+        ("typeof foo === 'nunber'", None),
+        ("typeof foo === 'obejct'", None),
+        ("typeof foo === 'symol'", None),
     ];
 
     let fix = vec![("typeof foo === undefined", r#"typeof foo === "undefined""#)];

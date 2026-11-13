@@ -4,6 +4,84 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [0.158.0] - 2026-11-09
+
+### 🐛 Bug Fixes
+
+- a791a5b cfg: Resolve continues through stacked loop labels (#29016) (camc314)
+- ec327aa semantic: Keep block type bindings separate from hoisted vars (#28601) (YT)
+
+## [0.157.0] - 2026-11-02
+
+### 🐛 Bug Fixes
+
+- 128c67d semantic: Check strict eval and arguments writes by reference flags (#28445) (Boshen)
+- fc0eed3 semantic: Stop let-binding scans at arrow functions (#28444) (Boshen)
+
+### ⚡ Performance
+
+- d85ee3d semantic: Skip arguments ancestry checks outside classes (#28510) (Boshen)
+- cf81d07 semantic: Reuse private reference resolution (#28509) (Boshen)
+- a79eebc semantic: Avoid duplicate maps for public JavaScript members (#28508) (Boshen)
+- 235ca3b semantic: Skip escape checks for unescaped strings (#28507) (Boshen)
+- 04b20c0 semantic: Compute duplicate parameter policy once per list (#28446) (Boshen)
+
+## [0.156.0] - 2026-10-27
+
+### 🐛 Bug Fixes
+
+- f4dac9e semantic: Separate hoisted vars from block type bindings (#27936) (limadog9)
+- 5c84098 semantic,linter: Report names with lone surrogates in enum and lint checks (#27991) (Dunqing)
+
+## [0.155.0] - 2026-10-19
+
+### 💥 BREAKING CHANGES
+
+- e3c1b11 ast: [**BREAKING**] Preserve lone surrogates in static property names (#27095) (Dunqing)
+
+## [0.154.0] - 2026-10-13
+
+### 🐛 Bug Fixes
+
+- f8e9a50 semantic: Stop arguments resolution at ordinary functions (#26929) (camc314)
+- 72bf06f crates/oxc_semantic: Decline to evaluate unary ops on strings in enum initializers (#27447) (Brooooooklyn)
+- 558a890 semantic: Mark delete of optional members as MemberWriteTarget (#27430) (Bartok)
+- 7e6a050 semantic: Visit `TSMethodSignature` computed method keys in enclosing scope (#27357) (camc314)
+
+## [0.153.0] - 2026-10-05
+
+### 🐛 Bug Fixes
+
+- b2793fa parser: Reject module syntax in script (#27220) (leaysgur)
+
+## [0.151.0] - 2026-09-21
+
+### ⚡ Performance
+
+- bd3f69e semantic: Reuse identifier hashes in enum member lookups (#26773) (camc314)
+
+## [0.150.0] - 2026-09-14
+
+### 🐛 Bug Fixes
+
+- a091fc4 parser: Validate await context for await using declarations (#26495) (camc314)
+
+## [0.149.0] - 2026-09-07
+
+### 🐛 Bug Fixes
+
+- 8b35abd semantic: Detect duplicate private class elements (#26361) (camc314)
+- 457ed57 semantic: Reject await and yield in rest parameter defaults (#26359) (camc314)
+- 4b89c7b semantic: Reject jumps across arrow functions (#26357) (camc314)
+
+## [0.148.0] - 2026-08-31
+
+### 🐛 Bug Fixes
+
+- 4adfb4c semantic: Validate chained continue labels (#26157) (camc314)
+- c3dedc9 semantic: Skip function body bindings in parameters (#26099) (Dunqing)
+- 8531b9b linter/plugins: Alter method for obtaining mutable `Program` when sending AST to JS plugins (#26077) (overlookmotel)
+
 ## [0.147.0] - 2026-08-24
 
 ### 🐛 Bug Fixes

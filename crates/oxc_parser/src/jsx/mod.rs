@@ -1,6 +1,6 @@
 //! [JSX](https://facebook.github.io/jsx)
 
-use oxc_allocator::{Allocator, ArenaBox, ArenaVec, Dummy, GetAllocator};
+use oxc_allocator::{Allocator, ArenaBox, ArenaVec, Dummy};
 use oxc_ast::ast::*;
 use oxc_span::{GetSpan, Span};
 use oxc_str::Str;
@@ -51,7 +51,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         start: u32,
         in_jsx_child: bool,
     ) -> ArenaBox<'a, JSXFragment<'a>> {
-        self.expect_jsx_child(Kind::RAngle);
+        debug_assert!(self.at(Kind::RAngle));
+        self.advance_for_jsx_child();
         let opening_fragment = JSXOpeningFragment::new(self.end_span(start), self);
         let (children, closing) = self.parse_jsx_children_and_closing(in_jsx_child);
         let closing_fragment = match closing {
@@ -160,10 +161,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             );
         }
 
-        if self.fatal_error.is_some() {
-            return JSXElementName::dummy(self.allocator());
-        }
-
         // Determine if this JSX element name is a reference (component) or an intrinsic element.
         // References (components) are:
         // - ASCII names that start with uppercase letter, `_` or `$`: `<Foo>`, `<_foo>`, `<$foo>`
@@ -171,14 +168,22 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // - Names without hyphens (hyphenated names like `<my-element>` are custom elements)
         // https://babeljs.io/repl#?code_lz=DwMQ9mAED0B8DcAoYAzCMHIPpqnJwAJLhkkA&presets=react
         //
-        // The identifier has already been validated by the parser, so for ASCII characters
-        // we know it can only be `a-z`, `A-Z`, `_` or `$`.
-        // Use a fast path for ASCII to avoid expensive Unicode operations in the common case.
+        // In case of a fatal error in `parse_jsx_identifier`, `name` is an empty string,
+        // so `!contains_dash` check must be first to avoid a panic in `name.as_bytes()[0]`.
+        //
+        // The identifier has already been validated by `parse_jsx_identifier`,
+        // so for ASCII characters we know it can only be `a-z`, `A-Z`, `_` or `$`.
+        // The 3-arm match below compiles down to a single `cmp` instruction.
+        // https://godbolt.org/z/jq3Gd7YrP
         let name = identifier.name.as_str();
         let is_reference = !contains_dash // Exclude hyphenated custom elements
             && match name.as_bytes()[0] {
-                b if b.is_ascii() => !b.is_ascii_lowercase(), // Matches A-Z, _, $
-                _ => true, // Non-ASCII characters are always treated as references
+                // Non-ASCII characters are always treated as references
+                b if !b.is_ascii() => true,
+                // Matches A-Z, _, $
+                b if b < b'a' => true,
+                // Matches a-z
+                _ => false
             };
 
         if is_reference {
@@ -247,81 +252,63 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         in_jsx_child: bool,
     ) -> (ArenaVec<'a, JSXChild<'a>>, JSXClosing<'a>) {
-        let mut children = ArenaVec::new_in(self);
-        let closing = self.parse_jsx_children_and_closing_into(&mut children, in_jsx_child);
-        (children, closing)
-    }
-
-    #[expect(clippy::inline_always)]
-    #[inline(always)]
-    fn parse_jsx_children_and_closing_into(
-        &mut self,
-        children: &mut ArenaVec<'a, JSXChild<'a>>,
-        in_jsx_child: bool,
-    ) -> JSXClosing<'a> {
-        loop {
-            if self.fatal_error.is_some() {
+        let mut closing = None;
+        let children = self.collect_list(|p| {
+            if p.fatal_error.is_some() {
                 // Return dummy closing fragment on fatal error
-                let closing = JSXClosingFragment::new(self.cur_token().span(), self);
-                return JSXClosing::Fragment(closing);
+                let fragment = JSXClosingFragment::new(p.cur_token().span(), p);
+                closing = Some(JSXClosing::Fragment(fragment));
+                return None;
             }
 
-            match self.cur_kind() {
+            let child = match p.cur_kind() {
                 Kind::LAngle => {
-                    let start = self.cur_start();
-                    self.bump_any(); // bump `<`
-                    let kind = self.cur_kind();
+                    let start = p.cur_start();
+                    p.bump_any(); // bump `<`
+                    let kind = p.cur_kind();
 
                     // <> open nested fragment
                     if kind == Kind::RAngle {
-                        let child = JSXChild::Fragment(self.parse_jsx_fragment(start, true));
-                        children.push(child);
-                        continue;
+                        JSXChild::Fragment(p.parse_jsx_fragment(start, true))
+                    } else if kind == Kind::Ident || kind.is_any_keyword() {
+                        // <ident open nested element
+                        JSXChild::Element(p.parse_jsx_element(start, true))
+                    } else if kind == Kind::Slash {
+                        // </ closing tag - parse it inline and return
+                        p.bump_any(); // bump `/`
+                        closing = Some(p.parse_jsx_closing_inline(start, in_jsx_child));
+                        return None;
+                    } else {
+                        // Unexpected token after `<`
+                        closing = Some(p.unexpected());
+                        return None;
                     }
-
-                    // <ident open nested element
-                    if kind == Kind::Ident || kind.is_any_keyword() {
-                        let child = JSXChild::Element(self.parse_jsx_element(start, true));
-                        children.push(child);
-                        continue;
-                    }
-
-                    // </ closing tag - parse it inline and return
-                    if kind == Kind::Slash {
-                        self.bump_any(); // bump `/`
-                        return self.parse_jsx_closing_inline(start, in_jsx_child);
-                    }
-
-                    // Unexpected token after `<`
-                    return self.unexpected();
                 }
                 Kind::LCurly => {
-                    let start = self.cur_start();
-                    self.bump_any(); // bump `{`
+                    let start = p.cur_start();
+                    p.bump_any(); // bump `{`
 
                     // {...expr}
-                    if self.eat(Kind::Dot3) {
-                        let child = JSXChild::Spread(self.parse_jsx_spread_child(start));
-                        children.push(child);
-                        continue;
+                    if p.eat(Kind::Dot3) {
+                        JSXChild::Spread(p.parse_jsx_spread_child(start))
+                    } else {
+                        // {expr}
+                        JSXChild::ExpressionContainer(
+                            p.parse_jsx_expression_container(start, /* in_jsx_child */ true),
+                        )
                     }
-                    // {expr}
-                    let child = JSXChild::ExpressionContainer(
-                        self.parse_jsx_expression_container(start, /* in_jsx_child */ true),
-                    );
-                    children.push(child);
                 }
                 // text
-                Kind::JSXText => {
-                    let child = JSXChild::Text(self.parse_jsx_text());
-                    children.push(child);
-                }
+                Kind::JSXText => JSXChild::Text(p.parse_jsx_text()),
                 _ => {
                     // Unexpected token in JSX children
-                    return self.unexpected();
+                    closing = Some(p.unexpected());
+                    return None;
                 }
-            }
-        }
+            };
+            Some(child)
+        });
+        (children, closing.unwrap())
     }
 
     /// Parses the closing element or fragment after `</` has been consumed.
@@ -333,9 +320,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if self.at(Kind::RAngle) {
             // Closing fragment: </>
             if in_jsx_child {
-                self.expect_jsx_child(Kind::RAngle);
+                self.advance_for_jsx_child();
             } else {
-                self.expect(Kind::RAngle);
+                self.advance(Kind::RAngle);
             }
             JSXClosing::Fragment(JSXClosingFragment::new(self.end_span(open_angle_start), self))
         } else {
@@ -362,9 +349,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ) -> ArenaBox<'a, JSXExpressionContainer<'a>> {
         let expr = if self.at(Kind::RCurly) {
             if in_jsx_child {
-                self.expect_jsx_child(Kind::RCurly);
+                self.advance_for_jsx_child();
             } else {
-                self.expect(Kind::RCurly);
+                self.advance(Kind::RCurly);
             }
             let span = self.end_span(start);
 
@@ -378,9 +365,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             //                                            ^^^^^^^^^^^^^ span
             JSXExpression::new_empty_expression(Span::new(span.start + 1, span.end - 1), self)
         } else {
+            let expr_start = self.cur_start();
             let expr = JSXExpression::from(self.parse_expr());
-            // JSX expressions may not use the comma operator.
-            if matches!(expr, JSXExpression::SequenceExpression(_)) {
+            // JSX expressions may not use an unparenthesized comma operator.
+            if matches!(&expr, JSXExpression::SequenceExpression(sequence) if sequence.span.start == expr_start)
+            {
                 self.error(diagnostics::jsx_expressions_may_not_use_the_comma_operator(
                     expr.span(),
                 ));
@@ -408,23 +397,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ///   `JSXSpreadAttribute` `JSXAttributes_opt`
     ///   `JSXAttribute` `JSXAttributes_opt`
     fn parse_jsx_attributes(&mut self) -> ArenaVec<'a, JSXAttributeItem<'a>> {
-        let mut attributes = ArenaVec::new_in(self);
-        loop {
-            let kind = self.cur_kind();
-            if matches!(kind, Kind::LAngle | Kind::RAngle | Kind::Slash)
-                || self.fatal_error.is_some()
+        self.collect_list(|p| {
+            let kind = p.cur_kind();
+            if matches!(kind, Kind::LAngle | Kind::RAngle | Kind::Slash) || p.fatal_error.is_some()
             {
-                break;
+                return None;
             }
             let attribute = match kind {
-                Kind::LCurly => {
-                    JSXAttributeItem::SpreadAttribute(self.parse_jsx_spread_attribute())
-                }
-                _ => JSXAttributeItem::Attribute(self.parse_jsx_attribute()),
+                Kind::LCurly => JSXAttributeItem::SpreadAttribute(p.parse_jsx_spread_attribute()),
+                _ => JSXAttributeItem::Attribute(p.parse_jsx_attribute()),
             };
-            attributes.push(attribute);
-        }
-        attributes
+            Some(attribute)
+        })
     }
 
     /// `JSXAttribute` :
@@ -475,7 +459,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_jsx_attribute_value(&mut self) -> JSXAttributeValue<'a> {
         match self.cur_kind() {
             Kind::Str => {
-                let str_lit = self.parse_literal_string();
+                let str_lit = self.parse_known_literal_string();
                 JSXAttributeValue::StringLiteral(self.alloc(str_lit))
             }
             Kind::LCurly => {
@@ -503,12 +487,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
     ) -> (
         JSXIdentifier<'a>, // JSX identifier
-        bool,              // `true` if contains `-`
+        bool,              // `true` if contains `-`, or if parsing failed (see below)
     ) {
         let start = self.cur_start();
         let kind = self.cur_kind();
         if kind != Kind::Ident && !kind.is_any_keyword() {
-            return (self.unexpected(), false);
+            // Return `contains_dash = true`, so that `parse_jsx_element_name` does not read the first byte
+            // of the dummy identifier's empty name. `parse_jsx_member_expression` treats a dash as an error,
+            // but on this path its `fatal_error` call is a no-op, because a fatal error has already been recorded.
+            return (self.unexpected(), true);
         }
         // Currently at a valid normal Ident or Keyword, keep on lexing for `-` in `<component-name />`
         let contains_dash = self.continue_lex_jsx_identifier();

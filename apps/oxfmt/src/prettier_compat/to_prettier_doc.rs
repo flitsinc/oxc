@@ -15,7 +15,7 @@ use oxc_formatter_core::{
 
 /// Converts `oxc_formatter` IR (`FormatElement` slice) into Prettier Doc.
 ///
-/// This is used for js-in-xxx formatting (both full and fragment)
+/// This is used for the Svelte / Astro `<script>` Prettier formats (`text_to_doc`)
 /// where the IR must be returned to Prettier as an unresolved Doc (rather than a printed string)
 /// so that Prettier can handle line-wrapping in the parent context.
 ///
@@ -44,7 +44,6 @@ pub fn format_elements_to_prettier_doc(
     let mut state = ConvertState::new(sorted_tailwind_classes);
     // The conversion starts at a line start (the printer's `line_width == 0`),
     // so a leading `Space` is dropped, not flushed.
-    // (Fragment Docs are spliced mid-line by Prettier, but no fragment IR can start with a `Space`.)
     let children = convert_elements(elements, &mut state, LineState::Hardline)?;
     let doc = normalize_array(children);
     // The JS side skips the restore walk entirely when `hasRootDedent` is false,
@@ -97,9 +96,17 @@ struct StackEntry {
 enum StartTagInfo {
     Indent,
     Align(u8),
+    /// Prettier's string `align`
+    Prefix(&'static str),
     Dedent(DedentMode),
-    Group { id: Option<GroupId>, should_break: bool },
-    ConditionalContent { mode: PrintMode, group_id: Option<GroupId> },
+    Group {
+        id: Option<GroupId>,
+        should_break: bool,
+    },
+    ConditionalContent {
+        mode: PrintMode,
+        group_id: Option<GroupId>,
+    },
     IndentIfGroupBreaks(GroupId),
     Fill,
     Entry,
@@ -371,21 +378,32 @@ fn convert_elements(
                     }
                     printer.pending_space = false;
                 }
-                let key = interned_cache_key(interned);
-                let id = if let Some(&id) = state.interned_to_ref.get(&key) {
-                    id
-                } else {
-                    // Reserve the slot index now:
-                    // the recursive `convert_elements` call below may push more refs,
-                    // so `state.refs.len()` would no longer equal this Interned's slot when we go to fill it.
-                    let id = state.refs.len();
-                    state.refs.push(Value::Null);
-                    state.interned_to_ref.insert(key, id);
+                // `fill` parts must stay a flat `[item, separator, ...]` list,
+                // but the formatter may wrap all entries in one `Interned` (e.g. JSX children).
+                // Splice them like the printer does, instead of emitting one opaque `_REF` part.
+                if matches!(
+                    stack.last().and_then(|entry| entry.start_info.as_ref()),
+                    Some(StartTagInfo::Fill)
+                ) {
                     let converted = convert_shared_elements(interned, state)?;
-                    state.refs[id] = normalize_array(converted);
-                    id
-                };
-                current_children_mut(&mut stack)?.push(json!({ "_REF": id }));
+                    current_children_mut(&mut stack)?.extend(converted);
+                } else {
+                    let key = interned_cache_key(interned);
+                    let id = if let Some(&id) = state.interned_to_ref.get(&key) {
+                        id
+                    } else {
+                        // Reserve the slot index now:
+                        // the recursive `convert_elements` call below may push more refs,
+                        // so `state.refs.len()` would no longer equal this Interned's slot when we go to fill it.
+                        let id = state.refs.len();
+                        state.refs.push(Value::Null);
+                        state.interned_to_ref.insert(key, id);
+                        let converted = convert_shared_elements(interned, state)?;
+                        state.refs[id] = normalize_array(converted);
+                        id
+                    };
+                    current_children_mut(&mut stack)?.push(json!({ "_REF": id }));
+                }
                 printer.line = LineState::Content;
             }
             FormatElement::BestFitting(best_fitting) => {
@@ -540,6 +558,7 @@ fn extract_start_tag_info(tag: &Tag) -> StartTagInfo {
     match tag {
         Tag::StartIndent => StartTagInfo::Indent,
         Tag::StartAlign(align) => StartTagInfo::Align(align.count().get()),
+        Tag::StartPrefix(prefix) => StartTagInfo::Prefix(prefix.text()),
         Tag::StartDedent(mode) => StartTagInfo::Dedent(*mode),
         Tag::StartGroup(group) => {
             StartTagInfo::Group { id: group.id(), should_break: !group.mode().is_flat() }
@@ -576,6 +595,9 @@ fn build_doc(start_info: Option<&StartTagInfo>, children: Vec<Value>) -> Value {
         }
         StartTagInfo::Align(count) => {
             json!({"type": "align", "n": *count, "contents": normalize_array(children)})
+        }
+        StartTagInfo::Prefix(prefix) => {
+            json!({"type": "align", "n": *prefix, "contents": normalize_array(children)})
         }
         StartTagInfo::MarkAsRoot => {
             // Prettier's `markAsRoot()` = `align({type: "root"}, ...)`
@@ -805,7 +827,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use oxc_formatter_core::{DedentMode, FormatElement, LineMode, Tag};
+    use oxc_formatter_core::{DedentMode, FormatElement, LineMode, Prefix, Tag};
 
     use super::{format_elements_to_prettier_doc, is_hard_line};
 
@@ -827,7 +849,7 @@ mod tests {
     fn exact(count: u32) -> FormatElement<'static> {
         FormatElement::Line(LineMode::ExactLineBreaks(NonZeroU32::new(count).unwrap()))
     }
-    const A: FormatElement<'static> = FormatElement::Token { text: "a" };
+    const A: FormatElement<'static> = FormatElement::token("a");
     const HARD: FormatElement<'static> = FormatElement::Line(LineMode::Hard);
     const EMPTY: FormatElement<'static> = FormatElement::Line(LineMode::Empty);
     const SPACE: FormatElement<'static> = FormatElement::Space;
@@ -882,14 +904,14 @@ mod tests {
         // Dangling comment in an otherwise-empty object:
         // `{` indent[softline, "// x", hardline] softline `}`
         let doc = to_doc(&[
-            FormatElement::Token { text: "{" },
+            FormatElement::token("{"),
             FormatElement::Tag(Tag::StartIndent),
             SOFT,
-            FormatElement::Token { text: "// x" },
+            FormatElement::token("// x"),
             HARD,
             FormatElement::Tag(Tag::EndIndent),
             SOFT,
-            FormatElement::Token { text: "}" },
+            FormatElement::token("}"),
         ]);
         assert_eq!(
             doc["doc"],
@@ -912,6 +934,16 @@ mod tests {
         // replacing it with a soft line could let the enclosing group flatten and lose the break.
         let doc = to_doc(&[A, HARD_NO_EXPAND, SOFT, A]);
         assert_eq!(count_hardlines(&doc), 1);
+    }
+
+    #[test]
+    fn prefix_align_is_a_string_align() {
+        let doc = to_doc(&[
+            FormatElement::Tag(Tag::StartPrefix(Prefix::new(&"> "))),
+            A,
+            FormatElement::Tag(Tag::EndPrefix),
+        ]);
+        assert_eq!(doc["doc"], json!({"type": "align", "n": "> ", "contents": "a"}));
     }
 
     #[test]

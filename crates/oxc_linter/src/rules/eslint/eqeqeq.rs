@@ -176,7 +176,8 @@ declare_oxc_lint!(
     fix = conditional_fix_dangerous,
     config = Eqeqeq,
     version = "0.0.3",
-    short_description = "Requires the use of the `===` and `!==` operators, disallowing the use of `==` and `!=`.",
+    short_description =
+        "Requires the use of the `===` and `!==` operators, disallowing the use of `==` and `!=`.",
 );
 
 impl Eqeqeq {
@@ -207,12 +208,16 @@ impl Rule for Eqeqeq {
         let is_null_comparison = is_null_check(binary_expr);
         let must_enforce_null = matches!(options.null, NullType::Always);
 
-        if !matches!(binary_expr.operator, BinaryOperator::Equality | BinaryOperator::Inequality) {
-            if is_null_comparison {
-                self.report_inverse_null_comparison(binary_expr, ctx);
+        let (preferred_operator, preferred_operator_with_padding) = match binary_expr.operator {
+            BinaryOperator::Equality => ("===", " === "),
+            BinaryOperator::Inequality => ("!==", " !== "),
+            _ => {
+                if is_null_comparison {
+                    self.report_inverse_null_comparison(binary_expr, ctx);
+                }
+                return;
             }
-            return;
-        }
+        };
 
         let is_typeof_check = is_type_of_binary(binary_expr);
         let is_same_type_literals =
@@ -232,8 +237,6 @@ impl Rule for Eqeqeq {
         }
 
         let operator = binary_expr.operator.as_str();
-        let (preferred_operator, preferred_operator_with_padding) =
-            to_strict_eq_operator_str(binary_expr.operator);
 
         let operator_span = get_operator_span(binary_expr, operator, ctx);
 
@@ -275,16 +278,6 @@ fn apply_rule_fix<'a>(
     fixer.replace(span, preferred_operator_with_padding)
 }
 
-fn to_strict_eq_operator_str(operator: BinaryOperator) -> (&'static str, &'static str) {
-    match operator {
-        BinaryOperator::Equality => ("===", " === "),
-        BinaryOperator::Inequality => ("!==", " !== "),
-        _ => unreachable!(
-            "Only Equality and Inequality operators are supported in to_strict_eq_operator_str"
-        ),
-    }
-}
-
 fn is_type_of(expr: &Expression) -> bool {
     matches!(
         expr,
@@ -312,10 +305,7 @@ fn are_literals_and_same_type(left: &Expression, right: &Expression) -> bool {
 }
 
 fn is_null_check(binary_expr: &BinaryExpression) -> bool {
-    matches!(
-        (&binary_expr.left, &binary_expr.right),
-        (_, Expression::NullLiteral(_)) | (Expression::NullLiteral(_), _)
-    )
+    binary_expr.left.is_null() || binary_expr.right.is_null()
 }
 
 #[test]

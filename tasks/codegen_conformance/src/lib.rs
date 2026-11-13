@@ -105,13 +105,14 @@ fn codegen_impl(
             // Parse the same way, or the two printers would be given different ASTs,
             // and the comparison would be measuring the parse, not the print.
             preserve_parens,
+            enable_ident_hashes: false,
             ..ParseOptions::default()
         })
         .parse();
 
     // Only print fixtures which parse cleanly. Oxc's parser recovers from errors, but a recovered
     // AST is not something the JS side can be expected to reproduce.
-    if ret.panicked || !ret.diagnostics.is_empty() {
+    if ret.fatal_error || !ret.diagnostics.is_empty() {
         return None;
     }
 

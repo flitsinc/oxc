@@ -96,7 +96,8 @@ declare_oxc_lint!(
     restriction,
     none,
     version = "1.53.0",
-    short_description = "Disallows the usage of `React.Children`, as it is considered a bad practice.",
+    short_description =
+        "Disallows the usage of `React.Children`, as it is considered a bad practice.",
 );
 
 impl Rule for NoReactChildren {
@@ -121,7 +122,7 @@ impl Rule for NoReactChildren {
 
         // Pattern 2: *.Children.method(), where `*` is any `react` import
         if let Some(inner_member) = object.as_member_expression()
-            && inner_member.static_property_name() == Some("Children")
+            && inner_member.static_property_name().is_some_and(|name| name == "Children")
             && let Some(ident) =
                 inner_member.object().get_inner_expression().get_identifier_reference()
             && is_import_from_module(ident, "react", ctx)

@@ -4,6 +4,32 @@ All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0).
 
+## [0.158.0] - 2026-11-09
+
+### ⚡ Performance
+
+- cc84126 mangler: Inline candidate checks during slot assignment (#28881) (Dunqing)
+
+### 📚 Documentation
+
+- 7acaa4e mangler: Correct naming strategy and pipeline order (#29073) (camc314)
+
+## [0.154.0] - 2026-10-13
+
+### 📚 Documentation
+
+- add0443 mangler: Clarify node ID renumbering in build (#27448) (camc314)
+
+## [0.149.0] - 2026-09-07
+
+### 💥 BREAKING CHANGES
+
+- 66744f0 parser: [**BREAKING**] Rename `panicked` to `fatal_error` in `ParserReturn` (#26382) (overlookmotel)
+
+### ⚡ Performance
+
+- d2354b4 mangler: Use `Ident` for variable names to keep (#26333) (sapphi-red)
+
 ## [0.145.0] - 2026-08-18
 
 ### 🚀 Features

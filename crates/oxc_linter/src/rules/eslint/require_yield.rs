@@ -39,8 +39,10 @@ declare_oxc_lint!(
     RequireYield,
     eslint,
     correctness,
+    recommended,
     version = "0.0.4",
-    short_description = "This rule generates warnings for generator functions that do not have the yield keyword.",
+    short_description =
+        "This rule generates warnings for generator functions that do not have the yield keyword.",
 );
 
 impl Rule for RequireYield {
