@@ -107,6 +107,15 @@ function Component(props) {
   return <div>{props.text}</div>;
 }
 ",
+        // Capitalized members of JavaScript built-ins are not components
+        "
+function Component(props) {
+  const daysInMonth = new Date(Date.UTC(props.year, props.month + 1, 0)).getUTCDate();
+  const price = Intl.NumberFormat('en-US').format(props.price);
+  const day = Intl.DateTimeFormat('en-US').format(props.date);
+  return <div>{daysInMonth} {price} {day}</div>;
+}
+",
     ];
 
     let fail = vec![
@@ -139,6 +148,15 @@ function Component() {
     {MyModule.Child2()}
   </>;
 }",
+        // An import named like a built-in is the module's own value
+        "
+import Date from './Date';
+function Component() {
+  return <>
+    {Date.Child()}
+  </>;
+}
+",
     ];
 
     Tester::new(CapitalizedCalls::NAME, CapitalizedCalls::PLUGIN, pass, fail).test_and_snapshot();
